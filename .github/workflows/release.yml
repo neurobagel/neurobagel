@@ -1,0 +1,53 @@
+name: release
+
+# release-please keeps one combined release PR for all tools and recipes (versions,
+# changelogs). Merging it makes release-please create one GitHub Release, and with it the
+# tag <component>-v<version>, per released folder. Its outputs then start the publishing
+# jobs below.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    outputs:
+      recipes: ${{ steps.rp.outputs['recipes--release_created'] }}
+      recipes-version: ${{ steps.rp.outputs['recipes--version'] }}
+      api: ${{ steps.rp.outputs['tools/api--release_created'] }}
+      api-version: ${{ steps.rp.outputs['tools/api--version'] }}
+      federation-api: ${{ steps.rp.outputs['tools/federation-api--release_created'] }}
+      federation-api-version: ${{ steps.rp.outputs['tools/federation-api--version'] }}
+      query-tool: ${{ steps.rp.outputs['tools/query-tool--release_created'] }}
+      query-tool-version: ${{ steps.rp.outputs['tools/query-tool--version'] }}
+      configure-nb: ${{ steps.rp.outputs['tools/configure-nb--release_created'] }}
+      configure-nb-version: ${{ steps.rp.outputs['tools/configure-nb--version'] }}
+    steps:
+      - name: Generate a token
+        id: generate-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ vars.NB_BOT_ID }}
+          private-key: ${{ secrets.NB_BOT_KEY }}
+
+      # The bot token makes release PRs trigger CI (GITHUB_TOKEN PRs do not).
+      - name: Run release-please
+        id: rp
+        uses: googleapis/release-please-action@v5
+        with:
+          token: ${{ steps.generate-token.outputs.token }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+      - name: Show outputs
+        env:
+          OUTPUTS: ${{ toJSON(steps.rp.outputs) }}
+        run: echo "$OUTPUTS"
