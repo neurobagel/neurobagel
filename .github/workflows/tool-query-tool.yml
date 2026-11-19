@@ -9,6 +9,7 @@ on:
       - "examples/**"
       - ".github/workflows/tool-query-tool.yml"
       - ".github/workflows/reusable-test-node.yml"
+      - ".github/workflows/reusable-docker-nightly-query-tool.yml"
   pull_request:
     paths:
       - "tools/query-tool/**"
@@ -16,6 +17,7 @@ on:
       - "examples/**"
       - ".github/workflows/tool-query-tool.yml"
       - ".github/workflows/reusable-test-node.yml"
+      - ".github/workflows/reusable-docker-nightly-query-tool.yml"
   workflow_dispatch:
 
 permissions:
@@ -31,4 +33,14 @@ jobs:
         NB_API_QUERY_URL=https://federate.neurobagel.org/
         NB_ENABLE_AUTH=true
         NB_QUERY_CLIENT_ID=mockclientid
+    secrets: inherit
+
+  # On push to main (and by hand on main): the `nightly` image, after the tests pass.
+  nightly:
+    needs: test
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/reusable-docker-nightly-query-tool.yml
     secrets: inherit

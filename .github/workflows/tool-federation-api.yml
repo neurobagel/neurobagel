@@ -7,11 +7,13 @@ on:
       - "tools/federation-api/**"
       - ".github/workflows/tool-federation-api.yml"
       - ".github/workflows/reusable-test-python.yml"
+      - ".github/workflows/reusable-docker-nightly.yml"
   pull_request:
     paths:
       - "tools/federation-api/**"
       - ".github/workflows/tool-federation-api.yml"
       - ".github/workflows/reusable-test-python.yml"
+      - ".github/workflows/reusable-docker-nightly.yml"
   workflow_dispatch:
 
 permissions:
@@ -24,4 +26,17 @@ jobs:
       tool: federation-api
       # the same versions as the tool's own CI (tools/federation-api/.github/workflows/test.yaml)
       python-versions: '["3.10", "3.11", "3.12", "3.13"]'
+    secrets: inherit
+
+  # On push to main (and by hand on main): the `nightly` image, after the tests pass.
+  nightly:
+    needs: test
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/reusable-docker-nightly.yml
+    with:
+      tool: federation-api
+      image: federation_api
     secrets: inherit

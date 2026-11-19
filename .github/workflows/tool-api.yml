@@ -9,6 +9,7 @@ on:
       - "examples/**"
       - ".github/workflows/tool-api.yml"
       - ".github/workflows/reusable-test-python.yml"
+      - ".github/workflows/reusable-docker-nightly.yml"
   pull_request:
     paths:
       - "tools/api/**"
@@ -16,6 +17,7 @@ on:
       - "examples/**"
       - ".github/workflows/tool-api.yml"
       - ".github/workflows/reusable-test-python.yml"
+      - ".github/workflows/reusable-docker-nightly.yml"
   workflow_dispatch:
 
 permissions:
@@ -31,4 +33,17 @@ jobs:
       # Tests marked `integration` need a running graph store (service-dependent): skipped
       # during the migration, they move to the global integration test suite.
       pytest-args: -m "not integration"
+    secrets: inherit
+
+  # On push to main (and by hand on main): the `nightly` image, after the tests pass.
+  nightly:
+    needs: test
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/reusable-docker-nightly.yml
+    with:
+      tool: api
+      image: api
     secrets: inherit
