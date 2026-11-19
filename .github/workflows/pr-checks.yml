@@ -1,0 +1,44 @@
+name: pr checks
+
+# PRs are squash-merged with the PR title as the commit message, and release-please reads
+# the commit messages: the title must be a conventional commit. Multi-tool PRs follow the
+# merge convention in DEVELOPING.md, checked at review.
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  pr-title:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    steps:
+      - name: Check the PR title
+        uses: amannn/action-semantic-pull-request@v6
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          types: |
+            feat
+            fix
+            perf
+            revert
+            docs
+            style
+            refactor
+            test
+            build
+            ci
+            chore
+          # tools, recipes, examples; deps for Dependabot
+          scopes: |
+            api
+            federation-api
+            query-tool
+            configure-nb
+            recipes
+            examples
+            deps

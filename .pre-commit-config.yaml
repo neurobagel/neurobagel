@@ -1,0 +1,191 @@
+# Root pre-commit configuration of the monorepo. Install once at the root:
+#   pre-commit install   (installs the pre-commit and post-merge hooks)
+#
+# The hooks are the tools' own hooks, defined here once and scoped to each tool's folder
+# (`files:`), with the tool's config file passed explicitly, because pre-commit runs hooks
+# from the repository root. Hook versions are the ones the tools use upstream. The tools'
+# own .pre-commit-config.yaml files stay in their folders unchanged: they are the old
+# repositories' configs during the monorepo trial, and are not used here.
+default_install_hook_types: [pre-commit, post-merge]
+default_stages: [pre-commit]
+
+ci:
+  autofix_prs: false
+  autoupdate_commit_msg: "chore: pre-commit autoupdate"
+  # Need Docker or query-tool's node_modules, which pre-commit.ci does not have. query-tool's
+  # lint and format checks also run in its CI workflow.
+  skip:
+    - docker-compose-check
+    - query-tool-typecheck
+    - query-tool-lint
+    - query-tool-format
+    - query-tool-npm-ci-after-merge
+
+repos:
+  # --- Python formatting and linting (api, federation-api, configure-nb) ------------------
+  - repo: https://github.com/psf/black-pre-commit-mirror
+    rev: 26.10.1
+    hooks:
+      - id: black
+        alias: black-api
+        files: ^tools/api/
+        args: [--config=tools/api/pyproject.toml]
+      - id: black
+        alias: black-federation-api
+        files: ^tools/federation-api/
+        args: [--config=tools/federation-api/pyproject.toml]
+      - id: black
+        alias: black-configure-nb
+        files: ^tools/configure-nb/
+        args: [--config=tools/configure-nb/pyproject.toml]
+
+  - repo: https://github.com/PyCQA/flake8
+    rev: 7.5.0
+    hooks:
+      - id: flake8
+        alias: flake8-api
+        files: ^tools/api/
+        args: [--config=tools/api/.flake8]
+      - id: flake8
+        alias: flake8-federation-api
+        files: ^tools/federation-api/
+        # federation-api passes its flake8 settings on the command line (no config file)
+        args:
+          - --extend-ignore=E501
+          - --extend-select=B950
+          - --per-file-ignores=./tools/federation-api/app/api/models.py:F722
+      - id: flake8
+        alias: flake8-configure-nb
+        files: ^tools/configure-nb/
+        args: [--config=tools/configure-nb/.flake8]
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-yaml
+        alias: check-yaml-python-tools
+        files: ^tools/(api|federation-api|configure-nb)/
+      - id: check-toml
+        alias: check-toml-api-configure-nb
+        files: ^tools/(api|configure-nb)/
+      - id: pretty-format-json
+        alias: pretty-format-json-api
+        files: ^tools/api/
+        args: [--autofix, --no-sort-keys]
+
+  - repo: https://github.com/pycqa/isort
+    rev: 10.0.0b3
+    hooks:
+      # --settings-path only, never --src (resolved relative to the settings file)
+      - id: isort
+        alias: isort-api
+        files: ^tools/api/
+        args: [--settings-path=tools/api/pyproject.toml]
+      - id: isort
+        alias: isort-federation-api
+        files: ^tools/federation-api/
+        args: [--settings-path=tools/federation-api/pyproject.toml]
+      - id: isort
+        alias: isort-configure-nb
+        files: ^tools/configure-nb/
+        args: [--settings-path=tools/configure-nb/pyproject.toml]
+
+  - repo: https://github.com/codespell-project/codespell
+    rev: v2.4.3
+    hooks:
+      - id: codespell
+        alias: codespell-api
+        files: ^tools/api/
+        additional_dependencies: [tomli]
+        args: [--config=tools/api/.codespellrc, --toml=tools/api/pyproject.toml]
+      - id: codespell
+        alias: codespell-federation-api
+        files: ^tools/federation-api/
+      - id: codespell
+        alias: codespell-configure-nb
+        files: ^tools/configure-nb/
+        additional_dependencies: [tomli]
+        args: [--toml=tools/configure-nb/pyproject.toml]
+      # query-tool ran codespell in CI upstream; here it runs with the other hooks. Its
+      # .codespellrc `skip` globs do not match the paths pre-commit passes, so the same
+      # files are excluded here.
+      - id: codespell
+        alias: codespell-query-tool
+        files: ^tools/query-tool/
+        exclude: ^tools/query-tool/(package-lock\.json$|\.codespellrc$)|\.css$
+        args: [--config=tools/query-tool/.codespellrc]
+
+  - repo: https://github.com/iamthefij/docker-pre-commit
+    rev: v3.0.1
+    hooks:
+      - id: docker-compose-check
+        files: ^tools/api/docker-compose\.yml$
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v2.4.1
+    hooks:
+      - id: mypy
+        alias: mypy-api
+        files: ^tools/api/
+        additional_dependencies: [pydantic]
+        args: [--config-file=tools/api/pyproject.toml]
+      - id: mypy
+        alias: mypy-configure-nb
+        files: ^tools/configure-nb/
+        additional_dependencies: [pydantic, typer]
+        args: [--config-file=tools/configure-nb/pyproject.toml]
+
+  # --- GitHub configuration --------------------------------------------------------------
+  - repo: https://github.com/python-jsonschema/check-jsonschema
+    rev: 0.39.0
+    hooks:
+      - id: check-github-workflows
+        alias: check-github-workflows-federation-api
+        files: ^tools/federation-api/\.github/workflows/[^/]+$
+      - id: check-github-workflows
+        alias: check-github-workflows-root
+      - id: check-dependabot
+
+  # --- query-tool (upstream husky + lint-staged) -------------------------------------------
+  # lint-staged ran typecheck and lint on staged ts/tsx files and format:check on any staged
+  # file, each over the whole tool. Needs `npm ci` in tools/query-tool.
+  - repo: local
+    hooks:
+      - id: query-tool-typecheck
+        name: query-tool typecheck
+        language: system
+        entry: npm --prefix tools/query-tool run typecheck
+        files: ^tools/query-tool/.*\.(ts|tsx)$
+        pass_filenames: false
+      - id: query-tool-lint
+        name: query-tool lint
+        language: system
+        entry: npm --prefix tools/query-tool run lint:check
+        files: ^tools/query-tool/.*\.(ts|tsx)$
+        pass_filenames: false
+      - id: query-tool-format
+        name: query-tool format check
+        language: system
+        entry: npm --prefix tools/query-tool run format:check
+        files: ^tools/query-tool/
+        pass_filenames: false
+      # Upstream husky post-merge hook: reinstall query-tool's dependencies when its
+      # package.json changed in the merge.
+      - id: query-tool-npm-ci-after-merge
+        name: query-tool npm ci after merge
+        language: system
+        entry: bash -c 'git diff --quiet ORIG_HEAD HEAD -- tools/query-tool/package.json || npm --prefix tools/query-tool ci'
+        stages: [post-merge]
+        always_run: true
+        pass_filenames: false
+
+  # --- configs shared by several tools: shared/ -> the copies listed in shared/files.yaml --
+  - repo: local
+    hooks:
+      - id: sync-shared
+        name: shared configs copied into the tools
+        language: python
+        additional_dependencies: [pyyaml==6.0.3]
+        entry: python scripts/sync-shared.py
+        always_run: true
+        pass_filenames: false
