@@ -1,0 +1,27 @@
+name: federation-api
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "tools/federation-api/**"
+      - ".github/workflows/tool-federation-api.yml"
+      - ".github/workflows/reusable-test-python.yml"
+  pull_request:
+    paths:
+      - "tools/federation-api/**"
+      - ".github/workflows/tool-federation-api.yml"
+      - ".github/workflows/reusable-test-python.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    uses: ./.github/workflows/reusable-test-python.yml
+    with:
+      tool: federation-api
+      # the same versions as the tool's own CI (tools/federation-api/.github/workflows/test.yaml)
+      python-versions: '["3.10", "3.11", "3.12", "3.13"]'
+    secrets: inherit

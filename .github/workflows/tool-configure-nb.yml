@@ -1,0 +1,27 @@
+name: configure-nb
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "tools/configure-nb/**"
+      - ".github/workflows/tool-configure-nb.yml"
+      - ".github/workflows/reusable-test-python.yml"
+  pull_request:
+    paths:
+      - "tools/configure-nb/**"
+      - ".github/workflows/tool-configure-nb.yml"
+      - ".github/workflows/reusable-test-python.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    uses: ./.github/workflows/reusable-test-python.yml
+    with:
+      tool: configure-nb
+      # the same versions as the tool's own CI (tools/configure-nb/.github/workflows/test.yaml)
+      python-versions: '["3.10", "3.11", "3.12", "3.13", "3.14"]'
+    secrets: inherit
