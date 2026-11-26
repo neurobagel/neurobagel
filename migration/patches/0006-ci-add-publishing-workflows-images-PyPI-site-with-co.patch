@@ -1,0 +1,619 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 19 Nov 2026 16:39:21 +0000
+Subject: [PATCH 6/8] ci: add publishing workflows (images, PyPI, site) with
+ configurable targets
+
+- reusable-docker-release.yml: the v<version> and latest images of a released tool (api, federation-api, query-tool), built from the tool's folder with its Dockerfile (symlinks materialized in the build context), pushed to IMAGE_REGISTRY/IMAGE_NAMESPACE (repository variables), as upstream's build_docker_on_release.yml.
+- reusable-docker-nightly.yml (api, federation-api) and reusable-docker-nightly-query-tool.yml (query-tool: amd64, version <version>-dev-<short sha>): the nightly images, as upstream's build_docker_nightly.yml; called by a `nightly` job in the tool's workflow on push to main after its tests pass.
+- release.yml: for each tool released by release-please, its release image, reusable-configure-nb-release.yml (PyPI upload; PYPI_REPOSITORY_URL selects the index) and reusable-sites.yml.
+- reusable-sites.yml: query-tool on Netlify, only when SITE_DEPLOY is true; also runnable by hand for a released version.
+---
+ .github/workflows/release.yml                 | 62 ++++++++++++
+ .../reusable-configure-nb-release.yml         | 58 +++++++++++
+ .../reusable-docker-nightly-query-tool.yml    | 76 ++++++++++++++
+ .github/workflows/reusable-docker-nightly.yml | 80 +++++++++++++++
+ .github/workflows/reusable-docker-release.yml | 98 +++++++++++++++++++
+ .github/workflows/reusable-sites.yml          | 71 ++++++++++++++
+ .github/workflows/tool-api.yml                | 15 +++
+ .github/workflows/tool-federation-api.yml     | 15 +++
+ .github/workflows/tool-query-tool.yml         | 12 +++
+ 9 files changed, 487 insertions(+)
+ create mode 100644 .github/workflows/reusable-configure-nb-release.yml
+ create mode 100644 .github/workflows/reusable-docker-nightly-query-tool.yml
+ create mode 100644 .github/workflows/reusable-docker-nightly.yml
+ create mode 100644 .github/workflows/reusable-docker-release.yml
+ create mode 100644 .github/workflows/reusable-sites.yml
+
+diff --git a/.github/workflows/release.yml b/.github/workflows/release.yml
+index ebfb1e9b..0e7ea1a5 100644
+--- a/.github/workflows/release.yml
++++ b/.github/workflows/release.yml
+@@ -51,3 +51,65 @@ jobs:
+         env:
+           OUTPUTS: ${{ toJSON(steps.rp.outputs) }}
+         run: echo "$OUTPUTS"
++
++  # --- publishing: images v<version> and latest, configure-nb on PyPI, the site ----------
++  # Reruns: "Re-run failed jobs" on this workflow run; reusable-sites.yml can also be run by
++  # hand.
++  # recipes publishes nothing beyond its GitHub Release.
++  api-image:
++    needs: release-please
++    if: needs.release-please.outputs.api == 'true'
++    permissions:
++      contents: read
++      packages: write
++    uses: ./.github/workflows/reusable-docker-release.yml
++    with:
++      tool: api
++      image: api
++      version: ${{ needs.release-please.outputs.api-version }}
++    secrets: inherit
++
++  federation-api-image:
++    needs: release-please
++    if: needs.release-please.outputs.federation-api == 'true'
++    permissions:
++      contents: read
++      packages: write
++    uses: ./.github/workflows/reusable-docker-release.yml
++    with:
++      tool: federation-api
++      image: federation_api
++      version: ${{ needs.release-please.outputs.federation-api-version }}
++    secrets: inherit
++
++  # The app shows its version from package.json, which the release PR already set to the
++  # released version.
++  query-tool-image:
++    needs: release-please
++    if: needs.release-please.outputs.query-tool == 'true'
++    permissions:
++      contents: read
++      packages: write
++    uses: ./.github/workflows/reusable-docker-release.yml
++    with:
++      tool: query-tool
++      image: query_tool
++      version: ${{ needs.release-please.outputs.query-tool-version }}
++    secrets: inherit
++
++  query-tool-site:
++    needs: release-please
++    if: needs.release-please.outputs.query-tool == 'true'
++    uses: ./.github/workflows/reusable-sites.yml
++    with:
++      tool: query-tool
++      version: ${{ needs.release-please.outputs.query-tool-version }}
++    secrets: inherit
++
++  configure-nb:
++    needs: release-please
++    if: needs.release-please.outputs.configure-nb == 'true'
++    uses: ./.github/workflows/reusable-configure-nb-release.yml
++    with:
++      version: ${{ needs.release-please.outputs.configure-nb-version }}
++    secrets: inherit
+diff --git a/.github/workflows/reusable-configure-nb-release.yml b/.github/workflows/reusable-configure-nb-release.yml
+new file mode 100644
+index 00000000..2bbf471d
+--- /dev/null
++++ b/.github/workflows/reusable-configure-nb-release.yml
+@@ -0,0 +1,58 @@
++name: configure-nb release
++
++# Called by the release workflow when release-please releases configure-nb: build the wheel
++# and sdist (version from the configure-nb-v* tag, through hatch-vcs) and upload them to
++# PyPI, as upstream's auto release did (`python -m build && twine upload dist/*`). The
++# repository variable PYPI_REPOSITORY_URL selects the index (unset: PyPI; TestPyPI for
++# validation, with a matching PYPI_TOKEN).
++on:
++  workflow_call:
++    inputs:
++      version:
++        description: Released version (X.Y.Z)
++        required: true
++        type: string
++
++permissions:
++  contents: read
++
++jobs:
++  pypi:
++    runs-on: ubuntu-latest
++    defaults:
++      run:
++        working-directory: tools/configure-nb
++    steps:
++      - name: Checkout
++        uses: actions/checkout@v7
++        with:
++          # the release tag, with the full history: hatch-vcs reads the version from it
++          ref: configure-nb-v${{ inputs.version }}
++          fetch-depth: 0
++          persist-credentials: false
++
++      - name: Set up Python 3.12
++        uses: actions/setup-python@v7
++        with:
++          python-version: "3.12"
++
++      - name: Install build & twine
++        run: python -m pip install build twine
++
++      - name: Build
++        run: python -m build
++
++      - name: Check the built version is the released version
++        env:
++          VERSION: ${{ inputs.version }}
++        run: |
++          ls dist
++          test -f "dist/configure_nb-${VERSION}-py3-none-any.whl"
++          test -f "dist/configure_nb-${VERSION}.tar.gz"
++
++      - name: Upload to PyPI
++        env:
++          TWINE_USERNAME: __token__
++          TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
++          TWINE_REPOSITORY_URL: ${{ vars.PYPI_REPOSITORY_URL || 'https://upload.pypi.org/legacy/' }}
++        run: twine upload dist/*
+diff --git a/.github/workflows/reusable-docker-nightly-query-tool.yml b/.github/workflows/reusable-docker-nightly-query-tool.yml
+new file mode 100644
+index 00000000..17784857
+--- /dev/null
++++ b/.github/workflows/reusable-docker-nightly-query-tool.yml
+@@ -0,0 +1,76 @@
++name: docker nightly query-tool (reusable)
++
++# The `nightly` image of query-tool, as upstream's build_docker_nightly.yml in query-tool:
++# amd64 only, and the app's version (package.json) marks the build:
++# <version>-dev-<short sha>. Called by tool-query-tool.yml on push to main after its tests
++# pass. Registry and namespace: repository variables IMAGE_REGISTRY and IMAGE_NAMESPACE.
++on:
++  workflow_call:
++
++permissions:
++  contents: read
++  packages: write
++
++jobs:
++  build:
++    runs-on: ubuntu-latest
++    steps:
++      - name: Check registry configuration
++        env:
++          REGISTRY: ${{ vars.IMAGE_REGISTRY }}
++          NAMESPACE: ${{ vars.IMAGE_NAMESPACE }}
++        run: |
++          if [ -z "$REGISTRY" ] || [ -z "$NAMESPACE" ]; then
++            echo "::error::Set the repository variables IMAGE_REGISTRY and IMAGE_NAMESPACE"; exit 1
++          fi
++
++      - name: Checkout
++        uses: actions/checkout@v7
++        with:
++          persist-credentials: false
++
++      # The tool's symlinks into recipes/ and examples/ (former submodules) would dangle
++      # inside the build context. Replace them with copies, as upstream's build context had
++      # the submodule contents.
++      - name: Materialize symlinks in the build context
++        working-directory: tools/query-tool
++        run: |
++          git ls-files -s . | awk '$1=="120000" {print $4}' | while read -r link; do
++            target="$(readlink -f "$link")"
++            rm "$link"
++            cp -R "$target" "$link"
++            echo "materialized $link"
++          done
++
++      - name: Update package.json version
++        working-directory: tools/query-tool
++        run: |
++          BASE=$(npm pkg get version | tr -d '"')
++          npm pkg set version="${BASE}-dev-${GITHUB_SHA::7}"
++          npm pkg get version
++
++      - name: Login to Docker Hub
++        if: vars.IMAGE_REGISTRY == 'docker.io'
++        uses: docker/login-action@v4
++        with:
++          username: ${{ secrets.DOCKERHUB_USERNAME }}
++          password: ${{ secrets.DOCKERHUB_TOKEN }}
++
++      - name: Login to ghcr
++        if: vars.IMAGE_REGISTRY == 'ghcr.io'
++        uses: docker/login-action@v4
++        with:
++          registry: ghcr.io
++          username: ${{ github.actor }}
++          password: ${{ secrets.GITHUB_TOKEN }}
++
++      - name: Set up Docker Buildx
++        uses: docker/setup-buildx-action@v4
++
++      - name: Build and push
++        uses: docker/build-push-action@v7
++        with:
++          context: tools/query-tool
++          file: tools/query-tool/Dockerfile
++          push: true
++          tags: ${{ vars.IMAGE_REGISTRY }}/${{ vars.IMAGE_NAMESPACE }}/query_tool:nightly
+diff --git a/.github/workflows/reusable-docker-nightly.yml b/.github/workflows/reusable-docker-nightly.yml
+new file mode 100644
+index 00000000..da9f6b66
+--- /dev/null
++++ b/.github/workflows/reusable-docker-nightly.yml
+@@ -0,0 +1,80 @@
++name: docker nightly (reusable)
++
++# The `nightly` image of one tool (api, federation-api), built from its own folder with its
++# Dockerfile, as upstream's build_docker_nightly.yml. Called by the tool's workflow
++# (tool-<tool>.yml) on push to main after its tests pass. The registry and namespace come
++# from the repository variables IMAGE_REGISTRY and IMAGE_NAMESPACE (ghcr for validation,
++# Docker Hub in production).
++on:
++  workflow_call:
++    inputs:
++      tool:
++        description: Tool folder name under tools/ (the build context)
++        required: true
++        type: string
++      image:
++        description: Image name (e.g. api, federation_api)
++        required: true
++        type: string
++
++permissions:
++  contents: read
++  packages: write
++
++jobs:
++  build:
++    runs-on: ubuntu-latest
++    steps:
++      - name: Check registry configuration
++        env:
++          REGISTRY: ${{ vars.IMAGE_REGISTRY }}
++          NAMESPACE: ${{ vars.IMAGE_NAMESPACE }}
++        run: |
++          if [ -z "$REGISTRY" ] || [ -z "$NAMESPACE" ]; then
++            echo "::error::Set the repository variables IMAGE_REGISTRY and IMAGE_NAMESPACE"; exit 1
++          fi
++
++      - name: Checkout
++        uses: actions/checkout@v7
++        with:
++          persist-credentials: false
++
++      # The tool's symlinks into recipes/ and examples/ (former submodules) would dangle
++      # inside the build context. Replace them with copies, as upstream's build context had
++      # the submodule contents.
++      - name: Materialize symlinks in the build context
++        working-directory: tools/${{ inputs.tool }}
++        run: |
++          git ls-files -s . | awk '$1=="120000" {print $4}' | while read -r link; do
++            target="$(readlink -f "$link")"
++            rm "$link"
++            cp -R "$target" "$link"
++            echo "materialized $link"
++          done
++
++      - name: Login to Docker Hub
++        if: vars.IMAGE_REGISTRY == 'docker.io'
++        uses: docker/login-action@v4
++        with:
++          username: ${{ secrets.DOCKERHUB_USERNAME }}
++          password: ${{ secrets.DOCKERHUB_TOKEN }}
++
++      - name: Login to ghcr
++        if: vars.IMAGE_REGISTRY == 'ghcr.io'
++        uses: docker/login-action@v4
++        with:
++          registry: ghcr.io
++          username: ${{ github.actor }}
++          password: ${{ secrets.GITHUB_TOKEN }}
++
++      - name: Set up Docker Buildx
++        uses: docker/setup-buildx-action@v4
++
++      - name: Build and push
++        uses: docker/build-push-action@v7
++        with:
++          platforms: linux/arm64, linux/amd64
++          context: tools/${{ inputs.tool }}
++          file: tools/${{ inputs.tool }}/Dockerfile
++          push: true
++          tags: ${{ vars.IMAGE_REGISTRY }}/${{ vars.IMAGE_NAMESPACE }}/${{ inputs.image }}:nightly
+diff --git a/.github/workflows/reusable-docker-release.yml b/.github/workflows/reusable-docker-release.yml
+new file mode 100644
+index 00000000..f9bddbcb
+--- /dev/null
++++ b/.github/workflows/reusable-docker-release.yml
+@@ -0,0 +1,98 @@
++name: docker release (reusable)
++
++# The release images v<version> and latest of one tool (api, federation-api, query-tool),
++# built from its own folder with its Dockerfile, as upstream's build_docker_on_release.yml.
++# Called by release.yml for each tool that release-please released. Registry and
++# namespace: repository variables IMAGE_REGISTRY and IMAGE_NAMESPACE.
++on:
++  workflow_call:
++    inputs:
++      tool:
++        description: Tool folder name under tools/ (the build context)
++        required: true
++        type: string
++      image:
++        description: Image name (e.g. api, federation_api, query_tool)
++        required: true
++        type: string
++      version:
++        description: Released version (X.Y.Z); the image tags are vX.Y.Z and latest
++        required: true
++        type: string
++
++permissions:
++  contents: read
++  packages: write
++
++jobs:
++  build:
++    runs-on: ubuntu-latest
++    steps:
++      - name: Check registry configuration
++        env:
++          REGISTRY: ${{ vars.IMAGE_REGISTRY }}
++          NAMESPACE: ${{ vars.IMAGE_NAMESPACE }}
++        run: |
++          if [ -z "$REGISTRY" ] || [ -z "$NAMESPACE" ]; then
++            echo "::error::Set the repository variables IMAGE_REGISTRY and IMAGE_NAMESPACE"; exit 1
++          fi
++
++      - name: Checkout
++        uses: actions/checkout@v7
++        with:
++          persist-credentials: false
++
++      # The tool's symlinks into recipes/ and examples/ (former submodules) would dangle
++      # inside the build context. Replace them with copies, as upstream's build context had
++      # the submodule contents.
++      - name: Materialize symlinks in the build context
++        working-directory: tools/${{ inputs.tool }}
++        run: |
++          git ls-files -s . | awk '$1=="120000" {print $4}' | while read -r link; do
++            target="$(readlink -f "$link")"
++            rm "$link"
++            cp -R "$target" "$link"
++            echo "materialized $link"
++          done
++
++      # OCI labels (created, revision, version) as upstream's release images had them
++      - name: Docker meta
++        id: meta
++        uses: docker/metadata-action@v6
++        with:
++          images: ${{ vars.IMAGE_REGISTRY }}/${{ vars.IMAGE_NAMESPACE }}/${{ inputs.image }}
++          tags: |
++            type=raw,value=v${{ inputs.version }}
++            type=raw,value=latest
++          flavor: latest=false
++
++      - name: Login to Docker Hub
++        if: vars.IMAGE_REGISTRY == 'docker.io'
++        uses: docker/login-action@v4
++        with:
++          username: ${{ secrets.DOCKERHUB_USERNAME }}
++          password: ${{ secrets.DOCKERHUB_TOKEN }}
++
++      - name: Login to ghcr
++        if: vars.IMAGE_REGISTRY == 'ghcr.io'
++        uses: docker/login-action@v4
++        with:
++          registry: ghcr.io
++          username: ${{ github.actor }}
++          password: ${{ secrets.GITHUB_TOKEN }}
++
++      - name: Set up Docker Buildx
++        uses: docker/setup-buildx-action@v4
++
++      - name: Build and push
++        uses: docker/build-push-action@v7
++        with:
++          platforms: linux/arm64, linux/amd64
++          context: tools/${{ inputs.tool }}
++          file: tools/${{ inputs.tool }}/Dockerfile
++          push: true
++          tags: ${{ steps.meta.outputs.tags }}
++          labels: |
++            org.opencontainers.image.created=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
++            org.opencontainers.image.revision=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.revision'] }}
++            org.opencontainers.image.version=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.version'] }}
+diff --git a/.github/workflows/reusable-sites.yml b/.github/workflows/reusable-sites.yml
+new file mode 100644
+index 00000000..c8c96980
+--- /dev/null
++++ b/.github/workflows/reusable-sites.yml
+@@ -0,0 +1,71 @@
++name: sites
++
++# Static sites on Netlify (formerly GitHub Pages; one repository can serve only one Pages
++# site, and the annotation tool's site joins later). Called by the release workflow when
++# release-please releases query-tool, or run manually for a released version. Deploys only
++# when the repository variable SITE_DEPLOY is "true".
++#   query-tool -> query.neurobagel.org (NETLIFY_QUERY_SITE_ID)
++on:
++  workflow_call:
++    inputs:
++      tool:
++        description: Tool folder name under tools/ (query-tool)
++        required: true
++        type: string
++      version:
++        description: Released version (X.Y.Z)
++        required: true
++        type: string
++  workflow_dispatch:
++    inputs:
++      tool:
++        description: Tool to deploy
++        required: true
++        type: choice
++        options: [query-tool]
++      version:
++        description: Released version to deploy (X.Y.Z; the tag <tool>-vX.Y.Z must exist)
++        required: true
++        type: string
++
++permissions:
++  contents: read
++
++concurrency:
++  group: sites-${{ inputs.tool }}
++  cancel-in-progress: true
++
++jobs:
++  query-tool:
++    if: inputs.tool == 'query-tool' && vars.SITE_DEPLOY == 'true'
++    runs-on: ubuntu-latest
++    defaults:
++      run:
++        working-directory: tools/query-tool
++    steps:
++      - name: Checkout
++        uses: actions/checkout@v7
++        with:
++          ref: ${{ inputs.tool }}-v${{ inputs.version }}
++          persist-credentials: false
++      - name: Add prod scripts
++        run: |
++          add_script='<script async src="https://w.appzi.io/w.js?token=YVTHd"></script><script defer data-domain="query.neurobagel.org" src="https://plausible.neurobagel.org/js/script.js"></script>'
++          # Need to use single quotes around sed to avoid ! to be interpreted as a history expansion character
++          sed -i 's|<!-- REPLACE_ME_NB_QUERY_HEADER_SCRIPT_REPLACE_ME -->|'"${add_script}"'|' index.html
++      - name: Set up Node
++        uses: actions/setup-node@v7
++        with:
++          node-version: 20
++      - name: Create .env file
++        run: |
++          echo -e "NB_API_QUERY_URL=https://federate.neurobagel.org/" > .env
++      - name: Install dependencies
++        run: npm ci
++      - name: Build
++        run: npm run build
++      - name: Deploy to Netlify
++        run: npx netlify-cli deploy --no-build --dir=dist --prod
++        env:
++          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_QUERY_SITE_ID }}
++          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+diff --git a/.github/workflows/tool-api.yml b/.github/workflows/tool-api.yml
+index e8f98062..85fc6c4f 100644
+--- a/.github/workflows/tool-api.yml
++++ b/.github/workflows/tool-api.yml
+@@ -9,6 +9,7 @@ on:
+       - "examples/**"
+       - ".github/workflows/tool-api.yml"
+       - ".github/workflows/reusable-test-python.yml"
++      - ".github/workflows/reusable-docker-nightly.yml"
+   pull_request:
+     paths:
+       - "tools/api/**"
+@@ -16,6 +17,7 @@ on:
+       - "examples/**"
+       - ".github/workflows/tool-api.yml"
+       - ".github/workflows/reusable-test-python.yml"
++      - ".github/workflows/reusable-docker-nightly.yml"
+   workflow_dispatch:
+ 
+ permissions:
+@@ -32,3 +34,16 @@ jobs:
+       # during the migration, they move to the global integration test suite.
+       pytest-args: -m "not integration"
+     secrets: inherit
++
++  # On push to main (and by hand on main): the `nightly` image, after the tests pass.
++  nightly:
++    needs: test
++    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
++    permissions:
++      contents: read
++      packages: write
++    uses: ./.github/workflows/reusable-docker-nightly.yml
++    with:
++      tool: api
++      image: api
++    secrets: inherit
+diff --git a/.github/workflows/tool-federation-api.yml b/.github/workflows/tool-federation-api.yml
+index fe540e04..cfcac567 100644
+--- a/.github/workflows/tool-federation-api.yml
++++ b/.github/workflows/tool-federation-api.yml
+@@ -7,11 +7,13 @@ on:
+       - "tools/federation-api/**"
+       - ".github/workflows/tool-federation-api.yml"
+       - ".github/workflows/reusable-test-python.yml"
++      - ".github/workflows/reusable-docker-nightly.yml"
+   pull_request:
+     paths:
+       - "tools/federation-api/**"
+       - ".github/workflows/tool-federation-api.yml"
+       - ".github/workflows/reusable-test-python.yml"
++      - ".github/workflows/reusable-docker-nightly.yml"
+   workflow_dispatch:
+ 
+ permissions:
+@@ -25,3 +27,16 @@ jobs:
+       # the same versions as the tool's own CI (tools/federation-api/.github/workflows/test.yaml)
+       python-versions: '["3.10", "3.11", "3.12", "3.13"]'
+     secrets: inherit
++
++  # On push to main (and by hand on main): the `nightly` image, after the tests pass.
++  nightly:
++    needs: test
++    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
++    permissions:
++      contents: read
++      packages: write
++    uses: ./.github/workflows/reusable-docker-nightly.yml
++    with:
++      tool: federation-api
++      image: federation_api
++    secrets: inherit
+diff --git a/.github/workflows/tool-query-tool.yml b/.github/workflows/tool-query-tool.yml
+index dcefc2fb..f8672ecb 100644
+--- a/.github/workflows/tool-query-tool.yml
++++ b/.github/workflows/tool-query-tool.yml
+@@ -9,6 +9,7 @@ on:
+       - "examples/**"
+       - ".github/workflows/tool-query-tool.yml"
+       - ".github/workflows/reusable-test-node.yml"
++      - ".github/workflows/reusable-docker-nightly-query-tool.yml"
+   pull_request:
+     paths:
+       - "tools/query-tool/**"
+@@ -16,6 +17,7 @@ on:
+       - "examples/**"
+       - ".github/workflows/tool-query-tool.yml"
+       - ".github/workflows/reusable-test-node.yml"
++      - ".github/workflows/reusable-docker-nightly-query-tool.yml"
+   workflow_dispatch:
+ 
+ permissions:
+@@ -32,3 +34,13 @@ jobs:
+         NB_ENABLE_AUTH=true
+         NB_QUERY_CLIENT_ID=mockclientid
+     secrets: inherit
++
++  # On push to main (and by hand on main): the `nightly` image, after the tests pass.
++  nightly:
++    needs: test
++    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
++    permissions:
++      contents: read
++      packages: write
++    uses: ./.github/workflows/reusable-docker-nightly-query-tool.yml
++    secrets: inherit
+-- 
+2.39.5
+

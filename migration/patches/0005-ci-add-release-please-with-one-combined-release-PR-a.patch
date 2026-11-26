@@ -1,0 +1,130 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 19 Nov 2026 16:39:21 +0000
+Subject: [PATCH 5/8] ci: add release-please with one combined release PR and
+ GitHub Releases
+
+- release-please-config.json: one combined release PR (separate-pull-requests: false), per-folder versions, changelogs (release-please's default sections), GitHub Releases and <component>-v<version> tags for the four tools and recipes; breaking changes bump the minor version on 0.x. Python tools and recipes use the simple type (hatch-vcs reads the version from the tag), query-tool the node type.
+- .release-please-manifest.json seeded from each folder's last tag; bootstrap-sha is the last import commit.
+- release.yml: release-please with the bot app token (release PRs trigger CI); per-folder release outputs for the publishing jobs.
+---
+ .github/workflows/release.yml | 53 +++++++++++++++++++++++++++++++++++
+ .release-please-manifest.json |  7 +++++
+ release-please-config.json    | 31 ++++++++++++++++++++
+ 3 files changed, 91 insertions(+)
+ create mode 100644 .github/workflows/release.yml
+ create mode 100644 .release-please-manifest.json
+ create mode 100644 release-please-config.json
+
+diff --git a/.github/workflows/release.yml b/.github/workflows/release.yml
+new file mode 100644
+index 00000000..ebfb1e9b
+--- /dev/null
++++ b/.github/workflows/release.yml
+@@ -0,0 +1,53 @@
++name: release
++
++# release-please keeps one combined release PR for all tools and recipes (versions,
++# changelogs). Merging it makes release-please create one GitHub Release, and with it the
++# tag <component>-v<version>, per released folder. Its outputs then start the publishing
++# jobs below.
++on:
++  push:
++    branches: [main]
++  workflow_dispatch:
++
++permissions:
++  contents: read
++
++concurrency:
++  group: release
++  cancel-in-progress: false
++
++jobs:
++  release-please:
++    runs-on: ubuntu-latest
++    outputs:
++      recipes: ${{ steps.rp.outputs['recipes--release_created'] }}
++      recipes-version: ${{ steps.rp.outputs['recipes--version'] }}
++      api: ${{ steps.rp.outputs['tools/api--release_created'] }}
++      api-version: ${{ steps.rp.outputs['tools/api--version'] }}
++      federation-api: ${{ steps.rp.outputs['tools/federation-api--release_created'] }}
++      federation-api-version: ${{ steps.rp.outputs['tools/federation-api--version'] }}
++      query-tool: ${{ steps.rp.outputs['tools/query-tool--release_created'] }}
++      query-tool-version: ${{ steps.rp.outputs['tools/query-tool--version'] }}
++      configure-nb: ${{ steps.rp.outputs['tools/configure-nb--release_created'] }}
++      configure-nb-version: ${{ steps.rp.outputs['tools/configure-nb--version'] }}
++    steps:
++      - name: Generate a token
++        id: generate-token
++        uses: actions/create-github-app-token@v3
++        with:
++          app-id: ${{ vars.NB_BOT_ID }}
++          private-key: ${{ secrets.NB_BOT_KEY }}
++
++      # The bot token makes release PRs trigger CI (GITHUB_TOKEN PRs do not).
++      - name: Run release-please
++        id: rp
++        uses: googleapis/release-please-action@v5
++        with:
++          token: ${{ steps.generate-token.outputs.token }}
++          config-file: release-please-config.json
++          manifest-file: .release-please-manifest.json
++
++      - name: Show outputs
++        env:
++          OUTPUTS: ${{ toJSON(steps.rp.outputs) }}
++        run: echo "$OUTPUTS"
+diff --git a/.release-please-manifest.json b/.release-please-manifest.json
+new file mode 100644
+index 00000000..f8423d01
+--- /dev/null
++++ b/.release-please-manifest.json
+@@ -0,0 +1,7 @@
++{
++  "recipes": "0.9.2",
++  "tools/api": "0.12.0",
++  "tools/federation-api": "0.10.0",
++  "tools/query-tool": "0.17.1",
++  "tools/configure-nb": "0.2.0"
++}
+diff --git a/release-please-config.json b/release-please-config.json
+new file mode 100644
+index 00000000..b308e7ca
+--- /dev/null
++++ b/release-please-config.json
+@@ -0,0 +1,31 @@
++{
++  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
++  "bootstrap-sha": "397d5d2f31f11b5e6525ddb284881be88149448d",
++  "separate-pull-requests": false,
++  "bump-minor-pre-major": true,
++  "include-component-in-tag": true,
++  "include-v-in-tag": true,
++  "tag-separator": "-",
++  "packages": {
++    "recipes": {
++      "release-type": "simple",
++      "component": "recipes"
++    },
++    "tools/api": {
++      "release-type": "simple",
++      "component": "api"
++    },
++    "tools/federation-api": {
++      "release-type": "simple",
++      "component": "federation-api"
++    },
++    "tools/query-tool": {
++      "release-type": "node",
++      "component": "query-tool"
++    },
++    "tools/configure-nb": {
++      "release-type": "simple",
++      "component": "configure-nb"
++    }
++  }
++}
+-- 
+2.39.5
+
