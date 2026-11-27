@@ -33,6 +33,7 @@ jobs:
             build
             ci
             chore
+            deps
           # tools, recipes, examples; deps for Dependabot
           scopes: |
             api
