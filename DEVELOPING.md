@@ -131,6 +131,7 @@ The type decides the release and the changelog section (release-please's default
 | `fix` | patch | Bug Fixes |
 | `perf` | patch | Performance Improvements |
 | `revert` | patch | Reverts |
+| `deps` | patch | 🔩 Dependency Updates |
 | `refactor`, `docs`, `test`, `chore`, `ci`, `build`, `style` | none | not listed |
 
 `!` marks a breaking change ("⚠ BREAKING CHANGES" in the changelog); while a tool is on 0.x, a breaking change bumps the minor version. An internal change that should be released (the old `pr-internal` label) needs a releasing type, usually `fix`.
